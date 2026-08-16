@@ -88,9 +88,7 @@ export default function App() {
   });
   const [dag, setDag] = useState<ReasoningDAG | null>(null);
   const [selectedNode, setSelectedNode] = useState<DAGNode | null>(null);
-  const [correctionNote, setCorrectionNote] = useState<string>(
-    'Adjusting for cardiac history, ECG shows ST-depression in V4-V6; prioritize NSTE-ACS workup with DAPT over antacids.'
-  );
+  const [correctionNote, setCorrectionNote] = useState<string>("");
 
   // Persistence State
   const [folders, setFolders] = useState<Folder[]>(() => {
@@ -560,14 +558,144 @@ export default function App() {
         throw new Error(errMessage);
       }
 
-      const updatedDAG: ReasoningDAG = await response.json();
-      setDag(updatedDAG);
-
-      // Select the first new/regenerated node if available
-      const firstNewNode = updatedDAG.nodes.find((n) => n.isNewOrRegenerated);
-      if (firstNewNode) {
-        setSelectedNode(firstNewNode);
+      const contentType = response.headers.get('content-type') || '';
+      if (!contentType.includes('text/event-stream')) {
+        const updatedDAG: ReasoningDAG = await response.json();
+        setDag(updatedDAG);
+        const firstNewNode = updatedDAG.nodes.find((n) => n.isNewOrRegenerated);
+        if (firstNewNode) setSelectedNode(firstNewNode);
+        return;
       }
+
+      if (!response.body) {
+        throw new Error('The re-reasoning stream did not include a readable response body.');
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      const requestNodeIds = new Set<string>();
+      let streamBuffer = '';
+      let receivedComplete = false;
+      let streamError: string | null = null;
+
+      const applyReReasonEvent = (rawEvent: string) => {
+        let eventName = 'message';
+        const dataLines: string[] = [];
+        for (const line of rawEvent.split(/\r?\n/)) {
+          if (line.startsWith('event:')) eventName = line.slice(6).trim();
+          else if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart());
+        }
+        if (dataLines.length === 0) return;
+        const data = JSON.parse(dataLines.join('\n'));
+
+        if (eventName === 're-started') {
+          setDag((current) => current ? {
+            ...current,
+            nodes: current.nodes.filter((node) => !node.isStreaming),
+          } : current);
+        } else if (eventName === 're-reset') {
+          setDag((current) => current ? {
+            ...current,
+            nodes: current.nodes.filter(
+              (node) => !node.isStreaming && !requestNodeIds.has(node.id)
+            ),
+            edges: current.edges.filter(
+              (edge) => !requestNodeIds.has(edge.source) && !requestNodeIds.has(edge.target)
+            ),
+          } : current);
+          requestNodeIds.clear();
+        } else if (eventName === 'node-progress') {
+          const streamIndex = Number(data.index || 0);
+          const streamingNode: DAGNode = {
+            id: `streaming-node-${streamIndex}`,
+            type: data.type || 'HYPOTHESIS',
+            title: data.title || '수정된 추론 단계 생성 중',
+            summary: data.summary || data.title || '',
+            detail: '',
+            confidence: 0,
+            evidence: [],
+            x: 80 + streamIndex * 280,
+            y: 140,
+            isStreaming: true,
+            isNewOrRegenerated: true,
+            streamIndex,
+            computeTime: 'streaming',
+          };
+          setDag((current) => {
+            if (!current) return current;
+            const nodes = current.nodes.filter(
+              (node) => !node.isStreaming || node.streamIndex !== streamIndex
+            );
+            return { ...current, nodes: [...nodes, streamingNode] };
+          });
+          setSelectedNode((current) =>
+            !current || current.flaggedIncorrect || current.isStreaming ? streamingNode : current
+          );
+        } else if (eventName === 'node') {
+          const node = { ...(data as DAGNode), isNewOrRegenerated: true };
+          requestNodeIds.add(node.id);
+          const streamIndex = typeof node.x === 'number'
+            ? Math.max(0, Math.round((node.x - 80) / 280))
+            : 0;
+          setDag((current) => {
+            if (!current) return current;
+            const withoutPlaceholder = current.nodes.filter(
+              (item) => !item.isStreaming || item.streamIndex !== streamIndex
+            );
+            const existingIndex = withoutPlaceholder.findIndex((item) => item.id === node.id);
+            const nodes = existingIndex >= 0
+              ? withoutPlaceholder.map((item, index) => index === existingIndex ? node : item)
+              : [...withoutPlaceholder, node];
+            return { ...current, nodes };
+          });
+          setSelectedNode((current) =>
+            !current || current.flaggedIncorrect ||
+            (current.isStreaming && current.streamIndex === streamIndex) ? node : current
+          );
+        } else if (eventName === 'edge') {
+          const edge = data as DAGEdge;
+          setDag((current) => {
+            if (!current) return current;
+            const existingIndex = current.edges.findIndex((item) => item.id === edge.id);
+            const edges = existingIndex >= 0
+              ? current.edges.map((item, index) => index === existingIndex ? edge : item)
+              : [...current.edges, edge];
+            return { ...current, edges };
+          });
+        } else if (eventName === 'result') {
+          setDag((current) => current ? {
+            ...current,
+            summaryDiagnosis: data.summaryDiagnosis || current.summaryDiagnosis,
+            treatmentPlan: data.treatmentPlan || current.treatmentPlan,
+            prescriptions: data.prescriptions || current.prescriptions,
+            contraindicationsChecked: data.contraindicationsChecked || current.contraindicationsChecked,
+            followUpInstructions: data.followUpInstructions || current.followUpInstructions,
+          } : current);
+        } else if (eventName === 'complete') {
+          const updatedDAG = data as ReasoningDAG;
+          receivedComplete = true;
+          setDag(updatedDAG);
+          setSelectedNode((current) =>
+            updatedDAG.nodes.find((node) => node.id === current?.id) ||
+            updatedDAG.nodes.find((node) => requestNodeIds.has(node.id)) ||
+            updatedDAG.nodes[0] || null
+          );
+        } else if (eventName === 'error') {
+          streamError = data.message || 'The re-reasoning stream terminated unexpectedly.';
+        }
+      };
+
+      while (true) {
+        const { done, value } = await reader.read();
+        streamBuffer += decoder.decode(value, { stream: !done });
+        const events = streamBuffer.split(/\r?\n\r?\n/);
+        streamBuffer = events.pop() || '';
+        events.forEach(applyReReasonEvent);
+        if (done) break;
+      }
+      if (streamBuffer.trim()) applyReReasonEvent(streamBuffer);
+      if (streamError) throw new Error(streamError);
+      if (!receivedComplete) throw new Error('The re-reasoning stream ended before completion.');
     } catch (err: any) {
       console.error('Failed to execute re-reasoning from server, using client fallback:', err);
       try {

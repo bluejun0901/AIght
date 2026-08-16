@@ -1586,7 +1586,8 @@ Requirements:
 - Create new edges connecting intact nodes to the new replacement nodes.
 - Keep each title <= 8 words, summary to 1 sentence, detail to 1-2 short sentences, evidence to 2-3 items, and references to at most 1.
 - Preserve essential diagnosis, prescription dosage/route/frequency/duration, contraindications, and follow-up; omit repetition and optional background.
-- Return ONLY valid JSON matching the schema.`;
+- Each replacement node contains its incomingEdges. Generate nodes in topological order.
+- Return ONLY valid JSON matching the schema, preserving this exact property order: "nodes", then "result".`;
 
     const promptText = `Original Patient Presentation:
 ${prompt}
@@ -1683,19 +1684,43 @@ Generate the corrected downstream reasoning DAG branch, new edges connecting to 
       ],
     };
 
-    let parsed: any;
-    let generationSource: 'vllm' | 'fallback' = 'vllm';
-    try {
-      parsed = await executeOpenAICompatibleWithRetry({
-        promptText,
-        systemInstruction,
-        responseSchema,
-      });
-    } catch (apiError: any) {
-      console.warn('[OpenAI-compatible API] Live model re-reasoning failed or unavailable. Using clinical synthesis re-reason engine:', apiError?.message || apiError);
-      generationSource = 'fallback';
-      parsed = buildFallbackReReasonDAG(prompt, intactNodes, intactEdges, flaggedNode, correctionInstructions);
-    }
+    const streamingResponseSchema = {
+      type: 'object',
+      properties: {
+        nodes: {
+          ...responseSchema.properties.newNodes,
+          items: {
+            ...responseSchema.properties.newNodes.items,
+            properties: {
+              ...responseSchema.properties.newNodes.items.properties,
+              incomingEdges: responseSchema.properties.newEdges,
+            },
+            required: [
+              ...responseSchema.properties.newNodes.items.required,
+              'incomingEdges',
+            ],
+          },
+        },
+        result: {
+          type: 'object',
+          properties: {
+            summaryDiagnosis: responseSchema.properties.summaryDiagnosis,
+            treatmentPlan: responseSchema.properties.treatmentPlan,
+            prescriptions: responseSchema.properties.prescriptions,
+            contraindicationsChecked: responseSchema.properties.contraindicationsChecked,
+            followUpInstructions: responseSchema.properties.followUpInstructions,
+          },
+          required: [
+            'summaryDiagnosis',
+            'treatmentPlan',
+            'prescriptions',
+            'contraindicationsChecked',
+            'followUpInstructions',
+          ],
+        },
+      },
+      required: ['nodes', 'result'],
+    };
 
     // Combine intact nodes + flagged node (marked as flagged) + new replacement nodes
     const markedFlaggedNode = {
@@ -1704,16 +1729,8 @@ Generate the corrected downstream reasoning DAG branch, new edges connecting to 
       flagReason: `Overridden by physician: ${correctionInstructions}`,
     };
 
-    // Filter out previous downstream nodes or duplicate ids
     const validIntactNodes = (intactNodes || []).filter((n: any) => n.id !== flaggedNode.id);
-    const newReplacementNodes = (parsed.newNodes || []).map((n: any) => ({
-      ...n,
-      isNewOrRegenerated: true,
-    }));
-
-    const combinedNodes = [...validIntactNodes, markedFlaggedNode, ...newReplacementNodes];
-
-    // Combine edges
+    const baseNodes = [...validIntactNodes, markedFlaggedNode];
     const validEdges = (intactEdges || []).filter(
       (e: any) => e.target !== flaggedNode.id && e.source !== flaggedNode.id
     );
@@ -1725,27 +1742,115 @@ Generate the corrected downstream reasoning DAG branch, new edges connecting to 
       isFlaggedPath: true,
     };
 
-    const combinedEdges = [...validEdges, flaggedEdge, ...(parsed.newEdges || [])];
+    const generatedAt = new Date().toISOString();
+    res.status(200);
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders();
+    writeSse(res, 're-started', { prompt, generatedAt });
+
+    let generationSource: 'vllm' | 'fallback' = 'vllm';
+    let streamedResult: any = null;
+    const streamedNewNodes: any[] = [];
+    const streamedNewEdges: any[] = [];
+
+    try {
+      await streamOpenAICompatibleGraph({
+        promptText,
+        systemInstruction,
+        responseSchema: streamingResponseSchema,
+      }, (event) => {
+        if (event.type === 'node-progress') {
+          writeSse(res, 'node-progress', {
+            ...event.data,
+            index: baseNodes.length + Number(event.data?.index || 0),
+            isReReasoning: true,
+          });
+        } else if (event.type === 'node' && event.data?.id) {
+          const { incomingEdges, ...rawNode } = event.data;
+          const existingIndex = streamedNewNodes.findIndex((node) => node.id === rawNode.id);
+          if (existingIndex >= 0) streamedNewNodes[existingIndex] = rawNode;
+          else streamedNewNodes.push(rawNode);
+          const nodeIndex = existingIndex >= 0 ? existingIndex : streamedNewNodes.length - 1;
+          writeSse(res, 'node', {
+            ...positionStreamingNode(rawNode, baseNodes.length + nodeIndex),
+            isNewOrRegenerated: true,
+          });
+          if (Array.isArray(incomingEdges)) {
+            incomingEdges.forEach((edge: any) => {
+              const edgeIndex = streamedNewEdges.findIndex((item) => item.id === edge.id);
+              if (edgeIndex >= 0) streamedNewEdges[edgeIndex] = edge;
+              else streamedNewEdges.push(edge);
+              writeSse(res, 'edge', edge);
+            });
+          }
+        } else if (event.type === 'edge' && event.data?.id) {
+          const edgeIndex = streamedNewEdges.findIndex((item) => item.id === event.data.id);
+          if (edgeIndex >= 0) streamedNewEdges[edgeIndex] = event.data;
+          else streamedNewEdges.push(event.data);
+          writeSse(res, 'edge', event.data);
+        } else if (event.type === 'result') {
+          streamedResult = event.data;
+          writeSse(res, 'result', event.data);
+        }
+      });
+      if (streamedNewNodes.length === 0) {
+        throw new Error('The re-reasoning stream completed without replacement nodes.');
+      }
+    } catch (apiError: any) {
+      console.warn('[OpenAI-compatible API] Live re-reasoning stream failed. Streaming fallback branch:', apiError?.message || apiError);
+      generationSource = 'fallback';
+      const fallback = buildFallbackReReasonDAG(prompt, intactNodes, intactEdges, flaggedNode, correctionInstructions);
+      streamedNewNodes.splice(0, streamedNewNodes.length, ...(fallback.newNodes || []));
+      streamedNewEdges.splice(0, streamedNewEdges.length, ...(fallback.newEdges || []));
+      streamedResult = fallback;
+      writeSse(res, 're-reset', { prompt, generatedAt });
+      streamedNewNodes.forEach((node: any, index: number) => writeSse(res, 'node', {
+        ...positionStreamingNode(node, baseNodes.length + index),
+        isNewOrRegenerated: true,
+      }));
+      streamedNewEdges.forEach((edge: any) => writeSse(res, 'edge', edge));
+      writeSse(res, 'result', fallback);
+    }
+
+    // Filter out previous downstream nodes or duplicate ids
+    const newReplacementNodes = streamedNewNodes.map((n: any) => ({
+      ...n,
+      isNewOrRegenerated: true,
+    }));
+
+    const combinedNodes = [...validIntactNodes, markedFlaggedNode, ...newReplacementNodes];
+
+    // Combine edges
+    const combinedEdges = [...validEdges, flaggedEdge, ...streamedNewEdges];
 
     // Auto-layout combined graph
     const layout = autoLayoutDAG(combinedNodes, combinedEdges);
 
     const updatedDAG = {
       prompt,
-      generatedAt: new Date().toISOString(),
+      generatedAt,
       generationSource,
-      summaryDiagnosis: parsed.summaryDiagnosis || 'Corrected Clinical Diagnosis',
-      treatmentPlan: parsed.treatmentPlan || 'Updated management plan based on physician correction',
-      prescriptions: parsed.prescriptions || [],
-      contraindicationsChecked: parsed.contraindicationsChecked || [],
-      followUpInstructions: parsed.followUpInstructions || 'Continue telemetry and serial evaluation',
+      summaryDiagnosis: streamedResult?.summaryDiagnosis || 'Corrected Clinical Diagnosis',
+      treatmentPlan: streamedResult?.treatmentPlan || 'Updated management plan based on physician correction',
+      prescriptions: streamedResult?.prescriptions || [],
+      contraindicationsChecked: streamedResult?.contraindicationsChecked || [],
+      followUpInstructions: streamedResult?.followUpInstructions || 'Continue telemetry and serial evaluation',
       nodes: layout.nodes,
       edges: layout.edges,
     };
 
-    res.json(updatedDAG);
+    writeSse(res, 'complete', updatedDAG);
+    writeSse(res, 'done', { generationSource });
+    res.end();
   } catch (error: any) {
     console.error('Fatal Error in re-reasoning:', error);
+    if (res.headersSent) {
+      writeSse(res, 'error', { message: error?.message || 'Re-reasoning stream terminated unexpectedly.' });
+      return res.end();
+    }
     const fallback = buildFallbackReReasonDAG(
       req.body.prompt || '',
       req.body.intactNodes || [],
