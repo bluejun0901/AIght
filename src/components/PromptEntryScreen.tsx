@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { SAMPLE_CLINICAL_CASES } from '../lib/mockData';
-import { SavedSession } from '../types';
+import { CaseReferenceFile, SavedSession } from '../types';
 import {
   Sparkles,
   Send,
@@ -22,6 +22,10 @@ import {
   RotateCcw,
   Check,
   X,
+  Paperclip,
+  Upload,
+  FileText,
+  Image,
 } from 'lucide-react';
 
 interface PromptEntryScreenProps {
@@ -35,6 +39,9 @@ interface PromptEntryScreenProps {
   hasActiveDAG: boolean;
   onGoToDAGReview?: () => void;
   currentDagPrompt?: string;
+  referenceFiles: CaseReferenceFile[];
+  onAddReferenceFiles: (files: File[]) => void;
+  onRemoveReferenceFile: (id: string) => void;
 }
 
 export const PromptEntryScreen: React.FC<PromptEntryScreenProps> = ({
@@ -48,12 +55,23 @@ export const PromptEntryScreen: React.FC<PromptEntryScreenProps> = ({
   hasActiveDAG,
   onGoToDAGReview,
   currentDagPrompt,
+  referenceFiles,
+  onAddReferenceFiles,
+  onRemoveReferenceFile,
 }) => {
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [patientName, setPatientName] = useState('John Doe');
   const [patientAgeGender, setPatientAgeGender] = useState('62M');
   const [mrn, setMrn] = useState('MRN-884920');
   const [allergies, setAllergies] = useState('NKDA (No known drug allergies)');
   const [urgency, setUrgency] = useState<'Standard' | 'Urgent' | 'STAT'>('Urgent');
+  const [isDraggingFiles, setIsDraggingFiles] = useState(false);
+
+  const formatFileSize = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
 
   // Check if current prompt strictly matches one of the sample cases
   const matchedSample = SAMPLE_CLINICAL_CASES.find(
@@ -294,6 +312,92 @@ export const PromptEntryScreen: React.FC<PromptEntryScreenProps> = ({
                 }
               }}
             />
+
+            {/* Local-only reference attachments (never sent to the reasoning API) */}
+            <div className="mt-3 rounded-xl border border-[#BCABAE]/35 bg-[#FBFBFB] p-3">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-start gap-2">
+                  <Paperclip className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#0284C7]" />
+                  <div>
+                    <p className="text-xs font-bold text-[#0F0F0F]">Reference files (참고 자료)</p>
+                    <p className="text-[10px] leading-relaxed text-[#716969]">
+                      그래프 화면에서만 표시되며, AI 답변이나 추론 요청에는 포함되지 않습니다.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="flex shrink-0 items-center justify-center gap-1.5 rounded-lg border border-[#0284C7]/30 bg-[#0284C7]/10 px-3 py-1.5 text-[11px] font-bold text-[#0284C7] transition-colors hover:bg-[#0284C7]/15"
+                >
+                  <Upload className="h-3.5 w-3.5" />
+                  파일 선택
+                </button>
+                <input
+                  ref={fileInputRef}
+                  id="input-case-reference-files"
+                  type="file"
+                  multiple
+                  accept="image/*,application/pdf,text/plain,text/csv,.doc,.docx,.xls,.xlsx"
+                  className="hidden"
+                  onChange={(event) => {
+                    onAddReferenceFiles(Array.from(event.target.files || []));
+                    event.target.value = '';
+                  }}
+                />
+              </div>
+
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                onDragEnter={(event) => {
+                  event.preventDefault();
+                  setIsDraggingFiles(true);
+                }}
+                onDragOver={(event) => event.preventDefault()}
+                onDragLeave={() => setIsDraggingFiles(false)}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  setIsDraggingFiles(false);
+                  onAddReferenceFiles(Array.from(event.dataTransfer.files));
+                }}
+                className={`mt-2 flex w-full items-center justify-center rounded-lg border border-dashed px-3 py-2 text-[10px] transition-colors ${
+                  isDraggingFiles
+                    ? 'border-[#0284C7] bg-[#E0F2FE] text-[#0284C7]'
+                    : 'border-[#BCABAE]/60 bg-white text-[#716969] hover:border-[#0284C7]/50 hover:text-[#0284C7]'
+                }`}
+              >
+                파일을 여기에 놓거나 클릭해 업로드 · 파일당 최대 20MB
+              </button>
+
+              {referenceFiles.length > 0 && (
+                <div className="mt-2 flex gap-2 overflow-x-auto pb-0.5">
+                  {referenceFiles.map((file) => {
+                    const FileIcon = file.type.startsWith('image/') ? Image : FileText;
+                    return (
+                      <div
+                        key={file.id}
+                        className="flex min-w-0 max-w-[220px] shrink-0 items-center gap-2 rounded-lg border border-[#BCABAE]/35 bg-white px-2.5 py-2"
+                      >
+                        <FileIcon className="h-4 w-4 shrink-0 text-[#0284C7]" />
+                        <div className="min-w-0 flex-1 text-left">
+                          <p className="truncate text-[10px] font-semibold text-[#0F0F0F]">{file.name}</p>
+                          <p className="text-[9px] text-[#716969]">{formatFileSize(file.size)}</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => onRemoveReferenceFile(file.id)}
+                          className="rounded p-0.5 text-[#716969] hover:bg-[#FEF2F2] hover:text-[#DC2626]"
+                          aria-label={`${file.name} 삭제`}
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
 
             {/* Bottom Actions Bar */}
             <div className="mt-3 pt-3 border-t border-[#BCABAE]/20 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">

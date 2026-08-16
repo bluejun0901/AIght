@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   ReasoningDAG,
   DAGNode,
@@ -6,6 +6,7 @@ import {
   SavedSession,
   Folder,
   UserProfile,
+  CaseReferenceFile,
 } from './types';
 import {
   DEFAULT_FOLDERS,
@@ -22,6 +23,7 @@ import { Sidebar } from './components/Sidebar';
 import { PromptEntryScreen } from './components/PromptEntryScreen';
 import { ReadOnlyPromptBar } from './components/ReadOnlyPromptBar';
 import { DAGCanvas } from './components/DAGCanvas';
+import { CaseReferencePanel } from './components/CaseReferencePanel';
 import { NodeArticlePanel } from './components/NodeArticlePanel';
 import { ReReasonBar } from './components/ReReasonBar';
 import { SaveSessionModal } from './components/SaveSessionModal';
@@ -75,6 +77,8 @@ export default function App() {
 
   // Active Clinical Session State: starts blank on initial login
   const [prompt, setPrompt] = useState<string>('');
+  const [referenceFiles, setReferenceFiles] = useState<CaseReferenceFile[]>([]);
+  const referenceFilesRef = useRef<CaseReferenceFile[]>([]);
   const [patientInfo, setPatientInfo] = useState({
     patientName: 'Patient',
     patientAgeGender: 'Adult',
@@ -144,6 +148,57 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('aight_saved_sessions', JSON.stringify(savedSessions));
   }, [savedSessions]);
+
+  useEffect(() => {
+    referenceFilesRef.current = referenceFiles;
+  }, [referenceFiles]);
+
+  useEffect(() => {
+    return () => {
+      referenceFilesRef.current.forEach((file) => URL.revokeObjectURL(file.url));
+    };
+  }, []);
+
+  const clearReferenceFiles = () => {
+    referenceFilesRef.current.forEach((file) => URL.revokeObjectURL(file.url));
+    referenceFilesRef.current = [];
+    setReferenceFiles([]);
+  };
+
+  const handleAddReferenceFiles = (files: File[]) => {
+    const MAX_FILE_SIZE = 20 * 1024 * 1024;
+    const accepted = files.filter((file) => file.size <= MAX_FILE_SIZE);
+    const rejectedCount = files.length - accepted.length;
+
+    if (rejectedCount > 0) {
+      setErrorToast(`20MB를 초과한 파일 ${rejectedCount}개는 추가되지 않았습니다.`);
+    }
+
+    if (accepted.length === 0) return;
+
+    const additions = accepted.map((file) => ({
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+      name: file.name,
+      size: file.size,
+      type: file.type || 'application/octet-stream',
+      url: URL.createObjectURL(file),
+    }));
+    setReferenceFiles((current) => {
+      const next = [...current, ...additions];
+      referenceFilesRef.current = next;
+      return next;
+    });
+  };
+
+  const handleRemoveReferenceFile = (id: string) => {
+    setReferenceFiles((current) => {
+      const removed = current.find((file) => file.id === id);
+      if (removed) URL.revokeObjectURL(removed.url);
+      const next = current.filter((file) => file.id !== id);
+      referenceFilesRef.current = next;
+      return next;
+    });
+  };
 
   // Fetch initial data from server if available
   useEffect(() => {
@@ -570,6 +625,7 @@ export default function App() {
 
   // Restore Session
   const handleRestoreSession = (session: SavedSession) => {
+    clearReferenceFiles();
     setDag(session.dagData);
     setPrompt(session.dagData.prompt);
     if (session.dagData.nodes.length > 0) {
@@ -588,6 +644,7 @@ export default function App() {
 
   // Start New Analysis (Switch to Prompt Entry screen)
   const handleNewAnalysis = () => {
+    clearReferenceFiles();
     setPrompt('');
     setDag(null);
     setSelectedNode(null);
@@ -597,6 +654,7 @@ export default function App() {
 
   // Sign out
   const handleSignOut = () => {
+    clearReferenceFiles();
     setUser(null);
     setDag(null);
     setSelectedNode(null);
@@ -606,6 +664,7 @@ export default function App() {
 
   // Load sample case directly
   const handleLoadSampleCase = () => {
+    clearReferenceFiles();
     const sample = SAMPLE_CLINICAL_CASES[0];
     setPrompt(sample.fullPrompt);
     setPatientInfo({
@@ -708,6 +767,9 @@ export default function App() {
               hasActiveDAG={!!dag && dag.nodes.length > 0}
               onGoToDAGReview={() => handleSetScreenMode('dag-review')}
               currentDagPrompt={dag?.prompt}
+              referenceFiles={referenceFiles}
+              onAddReferenceFiles={handleAddReferenceFiles}
+              onRemoveReferenceFile={handleRemoveReferenceFile}
             />
           ) : (
             /* SCREEN 2: Reasoning DAG & Correction Screen (Initial Prompt is strictly READ-ONLY) */
@@ -800,6 +862,8 @@ export default function App() {
                       hideFlaggedNodes={hideFlaggedNodes}
                       onToggleHideFlaggedNodes={() => setHideFlaggedNodes(!hideFlaggedNodes)}
                     />
+
+                    <CaseReferencePanel files={referenceFiles} />
 
                     {/* Bottom Re-Reasoning Bar when node(s) flagged */}
                     <ReReasonBar

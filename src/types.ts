@@ -63,6 +63,18 @@ export interface ReasoningDAG {
   prompt: string;
 }
 
+/**
+ * A local-only case attachment. The object URL is used exclusively for visual
+ * reference in the browser and is never included in a reasoning request.
+ */
+export interface CaseReferenceFile {
+  id: string;
+  name: string;
+  size: number;
+  type: string;
+  url: string;
+}
+
 export interface SavedSession {
   id: string;
   title: string;
