@@ -19,6 +19,7 @@ import {
   ArrowRight,
   Stethoscope,
   Move,
+  LoaderCircle,
 } from 'lucide-react';
 
 interface DAGCanvasProps {
@@ -322,6 +323,32 @@ export const DAGCanvas: React.FC<DAGCanvasProps> = ({
   };
 
   // 1. Clean Empty State when DAG is null or has no nodes
+  if (isLoading && (!dag || allNodes.length === 0)) {
+    return (
+      <div className="relative w-full h-full overflow-hidden bg-[#FBFBFB] flex items-center justify-center">
+        <div
+          className="absolute inset-0 opacity-40 pointer-events-none"
+          style={{ backgroundImage: 'radial-gradient(#BCABAE 1.2px, transparent 1.2px)', backgroundSize: '24px 24px' }}
+        />
+        <div className="relative flex flex-col items-center gap-4 rounded-2xl border border-[#00A896]/20 bg-white/95 px-8 py-7 shadow-sm">
+          <div className="relative flex h-14 w-14 items-center justify-center rounded-2xl bg-[#00A896]/10 text-[#00A896]">
+            <LoaderCircle className="h-7 w-7 animate-spin" />
+            <span className="absolute -right-1 -top-1 h-3 w-3 animate-pulse rounded-full bg-[#00A896] ring-4 ring-white" />
+          </div>
+          <div className="text-center">
+            <p className="text-sm font-bold text-[#0F0F0F]">첫 번째 추론 노드를 생성하고 있습니다</p>
+            <p className="mt-1 text-xs text-[#716969]">모델 응답이 도착하는 즉시 실시간으로 표시됩니다.</p>
+          </div>
+          <div className="flex items-center gap-1" aria-label="응답 생성 중">
+            {[0, 1, 2].map((index) => (
+              <span key={index} className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#00A896]" style={{ animationDelay: `${index * 140}ms` }} />
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (!dag || allNodes.length === 0) {
     return (
       <div
@@ -680,25 +707,31 @@ export const DAGCanvas: React.FC<DAGCanvasProps> = ({
           const Icon = typeConfig.icon;
           const isSelected = selectedNodeId === node.id;
           const isFlagged = node.flaggedIncorrect;
+          const isStreamingNode = node.isStreaming;
 
           return (
             <div
               key={node.id}
               id={`dag-node-${node.id}`}
-              onMouseDown={(e) => handleNodeMouseDown(e, node)}
-              onTouchStart={(e) => handleNodeTouchStart(e, node)}
+              onMouseDown={(e) => {
+                if (isStreamingNode) e.stopPropagation();
+                else handleNodeMouseDown(e, node);
+              }}
+              onTouchStart={(e) => !isStreamingNode && handleNodeTouchStart(e, node)}
               onClick={(e) => {
                 e.stopPropagation();
                 onSelectNode(node);
               }}
-              onDoubleClick={(e) => handleNodeDoubleClick(e, node)}
+              onDoubleClick={(e) => !isStreamingNode && handleNodeDoubleClick(e, node)}
               style={{
                 left: `${node.x}px`,
                 top: `${node.y}px`,
                 width: '220px',
               }}
-              className={`dag-node-card absolute pointer-events-auto cursor-pointer rounded-xl bg-white p-3.5 transition-shadow duration-150 select-none ${
-                isFlagged
+              className={`dag-node-card absolute pointer-events-auto rounded-xl bg-white p-3.5 transition-all duration-150 select-none ${
+                isStreamingNode
+                  ? 'cursor-wait border border-[#00A896]/50 shadow-[0_4px_16px_rgba(0,168,150,0.12)] ring-2 ring-[#00A896]/10'
+                  : isFlagged
                   ? 'border-2 border-[#EF4444] shadow-[0_4px_12px_rgba(239,68,68,0.15)] ring-2 ring-[#EF4444]/20'
                   : isSelected
                   ? 'border-2 border-[#00A896] shadow-[0_4px_14px_rgba(0,168,150,0.2)] ring-2 ring-[#00A896]/25'
@@ -724,18 +757,26 @@ export const DAGCanvas: React.FC<DAGCanvasProps> = ({
               {/* Node Header: Icon + Category Badge */}
               <div className="flex items-center justify-between gap-1 mb-2">
                 <div className="flex items-center gap-1.5">
-                  <Icon
-                    className="w-3.5 h-3.5 shrink-0"
-                    style={{ color: isFlagged ? '#EF4444' : typeConfig.color }}
-                  />
+                  {isStreamingNode ? (
+                    <LoaderCircle className="w-3.5 h-3.5 shrink-0 animate-spin text-[#00A896]" />
+                  ) : (
+                    <Icon
+                      className="w-3.5 h-3.5 shrink-0"
+                      style={{ color: isFlagged ? '#EF4444' : typeConfig.color }}
+                    />
+                  )}
                   <span
                     className="text-[10px] font-bold uppercase tracking-wider truncate"
                     style={{ color: isFlagged ? '#EF4444' : typeConfig.color }}
                   >
-                    {typeConfig.label}
+                    {isStreamingNode ? 'GENERATING' : typeConfig.label}
                   </span>
                 </div>
-                {node.confidence !== undefined && (
+                {isStreamingNode ? (
+                  <span className="flex items-center gap-1 text-[9px] font-bold text-[#00A896]">
+                    LIVE<span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#00A896]" />
+                  </span>
+                ) : node.confidence !== undefined && (
                   <span className="text-[9px] font-semibold text-[#716969] bg-[#BCABAE]/15 px-1.5 py-0.5 rounded">
                     {node.confidence}%
                   </span>
@@ -745,7 +786,17 @@ export const DAGCanvas: React.FC<DAGCanvasProps> = ({
               {/* Node Summary Text */}
               <p className="text-xs font-medium text-[#0F0F0F] leading-snug line-clamp-3 mb-1">
                 {node.summary || node.title}
+                {isStreamingNode && node.summary && (
+                  <span className="ml-0.5 inline-block h-3 w-[2px] animate-pulse bg-[#00A896] align-middle" />
+                )}
               </p>
+
+              {isStreamingNode && !node.summary && (
+                <div className="space-y-1.5 py-1" aria-label="노드 내용 생성 중">
+                  <div className="h-2 w-full animate-pulse rounded bg-[#BCABAE]/25" />
+                  <div className="h-2 w-4/5 animate-pulse rounded bg-[#BCABAE]/20" />
+                </div>
+              )}
 
               {/* Red User Flagged banner if marked incorrect */}
               {isFlagged && (
@@ -764,6 +815,50 @@ export const DAGCanvas: React.FC<DAGCanvasProps> = ({
             </div>
           );
         })}
+
+        {isLoading && !visibleNodes.some((node) => node.isStreaming) && (
+          <div
+            onClick={(event) => {
+              event.stopPropagation();
+              const streamIndex = visibleNodes.filter((node) => !node.isStreaming).length;
+              onSelectNode({
+                id: `streaming-node-${streamIndex}`,
+                type: 'OBSERVATION',
+                title: '다음 추론 단계 생성 중',
+                summary: '',
+                detail: '',
+                confidence: 0,
+                evidence: [],
+                x: 80 + streamIndex * 280,
+                y: 140,
+                isStreaming: true,
+                streamIndex,
+                computeTime: 'streaming',
+              });
+            }}
+            className="dag-node-card absolute pointer-events-auto w-[220px] cursor-pointer rounded-xl border border-dashed border-[#00A896]/50 bg-white/90 p-3.5 shadow-[0_4px_16px_rgba(0,168,150,0.08)] hover:border-[#00A896] hover:ring-2 hover:ring-[#00A896]/10"
+            style={{
+              left: `${80 + visibleNodes.filter((node) => !node.isStreaming).length * 280}px`,
+              top: '140px',
+            }}
+            aria-label="다음 추론 단계 생성 중"
+          >
+            <div className="mb-2 flex items-center justify-between">
+              <div className="flex items-center gap-1.5 text-[#00A896]">
+                <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+                <span className="text-[10px] font-bold uppercase tracking-wider">GENERATING</span>
+              </div>
+              <span className="flex items-center gap-1 text-[9px] font-bold text-[#00A896]">
+                LIVE<span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#00A896]" />
+              </span>
+            </div>
+            <p className="mb-2 text-xs font-medium text-[#716969]">다음 추론 단계를 준비하고 있습니다</p>
+            <div className="space-y-1.5">
+              <div className="h-2 w-full animate-pulse rounded bg-[#BCABAE]/25" />
+              <div className="h-2 w-3/5 animate-pulse rounded bg-[#BCABAE]/20" />
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

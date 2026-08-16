@@ -130,6 +130,7 @@ function parseJsonResponse(content: string): any {
 }
 
 type GraphStreamEvent =
+  | { type: 'node-progress'; data: any }
   | { type: 'node'; data: any }
   | { type: 'edge'; data: any }
   | { type: 'result'; data: any }
@@ -173,6 +174,51 @@ function extractCompletedArrayObjects(content: string, propertyName: string): an
   }
 
   return objects;
+}
+
+function extractInProgressArrayObject(content: string, propertyName: string): string {
+  const propertyIndex = content.indexOf(`"${propertyName}"`);
+  if (propertyIndex < 0) return '';
+  const arrayStart = content.indexOf('[', propertyIndex);
+  if (arrayStart < 0) return '';
+
+  let objectStart = -1;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = arrayStart + 1; index < content.length; index += 1) {
+    const character = content[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (character === '\\') escaped = true;
+      else if (character === '"') inString = false;
+      continue;
+    }
+    if (character === '"') inString = true;
+    else if (character === '{') {
+      if (depth === 0) objectStart = index;
+      depth += 1;
+    } else if (character === '}') {
+      depth -= 1;
+      if (depth === 0) objectStart = -1;
+    } else if (character === ']' && depth === 0) {
+      return '';
+    }
+  }
+
+  return objectStart >= 0 ? content.slice(objectStart) : '';
+}
+
+function readPartialJsonString(fragment: string, propertyName: string): string {
+  const match = fragment.match(new RegExp(`"${propertyName}"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)`));
+  if (!match) return '';
+  return match[1]
+    .replace(/\\n/g, ' ')
+    .replace(/\\r/g, '')
+    .replace(/\\t/g, ' ')
+    .replace(/\\"/g, '"')
+    .replace(/\\\\/g, '\\');
 }
 
 async function streamOpenAICompatibleGraph(
@@ -219,6 +265,7 @@ async function streamOpenAICompatibleGraph(
 
   let fullContent = '';
   let emittedNodeCount = 0;
+  let lastProgressSignature = '';
 
   const consumeContent = (chunk: string) => {
     fullContent += chunk;
@@ -231,6 +278,22 @@ async function streamOpenAICompatibleGraph(
         incomingEdges.forEach((edge) => onEvent({ type: 'edge', data: edge }));
       }
       emittedNodeCount += 1;
+    }
+
+    const fragment = extractInProgressArrayObject(fullContent, 'nodes');
+    if (fragment) {
+      const progress = {
+        index: emittedNodeCount,
+        id: readPartialJsonString(fragment, 'id'),
+        type: readPartialJsonString(fragment, 'type'),
+        title: readPartialJsonString(fragment, 'title'),
+        summary: readPartialJsonString(fragment, 'summary'),
+      };
+      const signature = JSON.stringify(progress);
+      if (signature !== lastProgressSignature) {
+        lastProgressSignature = signature;
+        onEvent({ type: 'node-progress', data: progress });
+      }
     }
   };
 
@@ -1417,7 +1480,9 @@ ${patientDetails ? `Additional Clinical Context: ${JSON.stringify(patientDetails
         systemInstruction,
         responseSchema: streamingResponseSchema,
       }, (event) => {
-        if (event.type === 'node' && event.data?.id) {
+        if (event.type === 'node-progress') {
+          writeSse(res, 'node-progress', event.data);
+        } else if (event.type === 'node' && event.data?.id) {
           const existingIndex = streamedNodes.findIndex((node) => node.id === event.data.id);
           if (existingIndex >= 0) {
             streamedNodes[existingIndex] = event.data;

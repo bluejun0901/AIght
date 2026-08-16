@@ -17,6 +17,7 @@ import {
   Layers,
   Eye,
   EyeOff,
+  LoaderCircle,
 } from 'lucide-react';
 
 interface NodeArticlePanelProps {
@@ -58,6 +59,7 @@ export const NodeArticlePanel: React.FC<NodeArticlePanelProps> = ({
 
   const typeConfig = getNodeTypeConfig(node.type);
   const isFlagged = node.flaggedIncorrect;
+  const isStreaming = node.isStreaming;
 
   return (
     <aside
@@ -78,7 +80,7 @@ export const NodeArticlePanel: React.FC<NodeArticlePanelProps> = ({
               border: `1px solid ${isFlagged ? '#FECACA' : typeConfig.border}`,
             }}
           >
-            {typeConfig.label}
+            {isStreaming ? 'GENERATING' : typeConfig.label}
           </span>
         </div>
         <button
@@ -98,7 +100,7 @@ export const NodeArticlePanel: React.FC<NodeArticlePanelProps> = ({
           <div className="flex items-center gap-2">
             <span
               className={`w-2 h-2 rounded-full ${
-                isFlagged ? 'bg-[#EF4444] animate-pulse' : 'bg-[#00A896]'
+                isFlagged ? 'bg-[#EF4444] animate-pulse' : isStreaming ? 'bg-[#00A896] animate-pulse' : 'bg-[#00A896]'
               }`}
             />
             <span
@@ -106,27 +108,37 @@ export const NodeArticlePanel: React.FC<NodeArticlePanelProps> = ({
                 isFlagged ? 'text-[#EF4444]' : 'text-[#00A896]'
               }`}
             >
-              {isFlagged ? 'FLAGGED FOR RE-REASONING' : 'ACTIVE ANALYSIS PATH'}
+              {isFlagged ? 'FLAGGED FOR RE-REASONING' : isStreaming ? 'LIVE RESPONSE · GENERATING' : 'ACTIVE ANALYSIS PATH'}
             </span>
           </div>
 
           {/* Node Title */}
           <h3 className="text-lg sm:text-xl font-bold text-[#0F0F0F] leading-tight">
             {node.title}
+            {isStreaming && (
+              <span className="ml-1 inline-block h-5 w-[2px] animate-pulse bg-[#00A896] align-middle" />
+            )}
           </h3>
 
           {/* Meta Badges: Compute Time & Confidence matching Image 2 */}
           <div className="flex items-center gap-2 flex-wrap text-xs font-medium">
-            {node.computeTime && (
+            {isStreaming ? (
+              <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#00A896]/10 text-[#00A896] font-semibold">
+                <LoaderCircle className="w-3.5 h-3.5 animate-spin" />
+                <span>토큰 수신 중</span>
+              </span>
+            ) : node.computeTime && (
               <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#BCABAE]/15 text-[#2D2E2E]">
                 <Clock className="w-3.5 h-3.5 text-[#716969]" />
                 <span>{node.computeTime}</span>
               </span>
             )}
-            <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#00A896]/10 text-[#00A896] font-semibold">
-              <Target className="w-3.5 h-3.5" />
-              <span>Confidence: {node.confidence}%</span>
-            </span>
+            {!isStreaming && (
+              <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#00A896]/10 text-[#00A896] font-semibold">
+                <Target className="w-3.5 h-3.5" />
+                <span>Confidence: {node.confidence}%</span>
+              </span>
+            )}
           </div>
         </div>
 
@@ -152,9 +164,20 @@ export const NodeArticlePanel: React.FC<NodeArticlePanelProps> = ({
           </div>
 
           {/* Detailed Paragraph */}
-          <p className="text-xs text-[#2D2E2E] leading-relaxed bg-white p-3.5 rounded-xl border border-[#BCABAE]/30">
-            {node.detail || node.summary}
-          </p>
+          {node.detail || node.summary ? (
+            <p className="text-xs text-[#2D2E2E] leading-relaxed bg-white p-3.5 rounded-xl border border-[#BCABAE]/30">
+              {node.detail || node.summary}
+              {isStreaming && (
+                <span className="ml-0.5 inline-block h-3 w-[2px] animate-pulse bg-[#00A896] align-middle" />
+              )}
+            </p>
+          ) : isStreaming ? (
+            <div className="space-y-2 bg-white p-3.5 rounded-xl border border-[#BCABAE]/30" aria-label="상세 추론 생성 중">
+              <div className="h-2.5 w-full animate-pulse rounded bg-[#BCABAE]/25" />
+              <div className="h-2.5 w-11/12 animate-pulse rounded bg-[#BCABAE]/20" />
+              <div className="h-2.5 w-2/3 animate-pulse rounded bg-[#BCABAE]/15" />
+            </div>
+          ) : null}
 
           {/* Bulleted Evidence Points matching Image 2 */}
           {node.evidence && node.evidence.length > 0 && (
@@ -205,7 +228,12 @@ export const NodeArticlePanel: React.FC<NodeArticlePanelProps> = ({
           </div>
 
           <div className="flex flex-col gap-2">
-            {node.references && node.references.length > 0 ? (
+            {isStreaming ? (
+              <div className="space-y-2 p-3 bg-white rounded-xl border border-[#BCABAE]/30" aria-label="출처 생성 중">
+                <div className="h-2.5 w-4/5 animate-pulse rounded bg-[#BCABAE]/25" />
+                <div className="h-2 w-1/2 animate-pulse rounded bg-[#BCABAE]/15" />
+              </div>
+            ) : node.references && node.references.length > 0 ? (
               node.references.map((ref, idx) => (
                 <div
                   key={idx}
@@ -235,6 +263,14 @@ export const NodeArticlePanel: React.FC<NodeArticlePanelProps> = ({
       </div>
 
       {/* Bottom Action Toolbar */}
+      {isStreaming ? (
+        <div className="p-4 border-t border-[#BCABAE]/30 bg-[#FBFBFB] sticky bottom-0">
+          <div className="flex items-center justify-center gap-2 rounded-xl bg-[#00A896]/10 px-3 py-2.5 text-xs font-semibold text-[#00A896]">
+            <LoaderCircle className="h-4 w-4 animate-spin" />
+            <span>노드가 완료되면 검토 작업을 사용할 수 있습니다.</span>
+          </div>
+        </div>
+      ) : (
       <div className="p-4 border-t border-[#BCABAE]/30 bg-[#FBFBFB] sticky bottom-0 flex flex-col gap-2">
         <div className="flex items-center gap-2">
           <button
@@ -287,6 +323,7 @@ export const NodeArticlePanel: React.FC<NodeArticlePanelProps> = ({
           </button>
         )}
       </div>
+      )}
     </aside>
   );
 };

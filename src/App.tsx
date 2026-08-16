@@ -278,17 +278,52 @@ export default function App() {
             generatedAt: data.generatedAt || emptyStreamingDAG.generatedAt,
           });
           setSelectedNode(null);
-        } else if (eventName === 'node') {
-          const node = data as DAGNode;
+        } else if (eventName === 'node-progress') {
+          const streamIndex = Number(data.index || 0);
+          const streamingNode: DAGNode = {
+            id: `streaming-node-${streamIndex}`,
+            type: data.type || 'OBSERVATION',
+            title: data.title || '다음 추론 단계 생성 중',
+            summary: data.summary || data.title || '',
+            detail: '',
+            confidence: 0,
+            evidence: [],
+            x: 80 + streamIndex * 280,
+            y: 140,
+            isStreaming: true,
+            streamIndex,
+            computeTime: 'streaming',
+          };
           setDag((current) => {
             const base = current || emptyStreamingDAG;
-            const index = base.nodes.findIndex((item) => item.id === node.id);
-            const nodes = index >= 0
-              ? base.nodes.map((item, itemIndex) => itemIndex === index ? node : item)
-              : [...base.nodes, node];
+            const nodes = base.nodes.filter(
+              (item) => !item.isStreaming || item.streamIndex !== streamIndex
+            );
+            nodes.push(streamingNode);
             return { ...base, nodes };
           });
-          setSelectedNode((current) => current || node);
+        } else if (eventName === 'node') {
+          const node = data as DAGNode;
+          const completedStreamIndex = typeof node.x === 'number'
+            ? Math.max(0, Math.round((node.x - 80) / 280))
+            : 0;
+          setDag((current) => {
+            const base = current || emptyStreamingDAG;
+            const completedCount = base.nodes.filter((item) => !item.isStreaming).length;
+            const withoutPlaceholder = base.nodes.filter(
+              (item) => !item.isStreaming || item.streamIndex !== completedCount
+            );
+            const index = withoutPlaceholder.findIndex((item) => item.id === node.id);
+            const nodes = index >= 0
+              ? withoutPlaceholder.map((item, itemIndex) => itemIndex === index ? node : item)
+              : [...withoutPlaceholder, node];
+            return { ...base, nodes };
+          });
+          setSelectedNode((current) => {
+            if (!current) return node;
+            if (current.isStreaming && current.streamIndex === completedStreamIndex) return node;
+            return current;
+          });
         } else if (eventName === 'edge') {
           const edge = data as DAGEdge;
           setDag((current) => {

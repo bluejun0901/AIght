@@ -29,6 +29,9 @@ export interface DAGNode {
   x?: number;
   y?: number;
   isNewOrRegenerated?: boolean;
+  /** Transient client state while a node is arriving from the model stream. */
+  isStreaming?: boolean;
+  streamIndex?: number;
 }
 
 export interface DAGEdge {
