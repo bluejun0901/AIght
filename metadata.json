@@ -1,0 +1,6 @@
+{
+  "name": "AIGHT",
+  "description": "Explainable AI (XAI) medical reasoning DAG review and correction platform for clinical diagnosis and prescription instructions.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_OPENAI_COMPATIBLE_API"]
+}
