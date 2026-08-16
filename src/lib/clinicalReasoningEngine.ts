@@ -1,5 +1,6 @@
 import { ReasoningDAG, DAGNode, DAGEdge, NodeType } from '../types';
 import { INITIAL_ACS_DAG, SAMPLE_CLINICAL_CASES } from './mockData';
+import { createRandomConfidence } from './confidence';
 
 // Topological Auto-Layout Algorithm for DAG coordinates
 export function layoutNodesAndEdges(nodes: DAGNode[], edges: DAGEdge[]) {
@@ -84,7 +85,7 @@ export function layoutNodesAndEdges(nodes: DAGNode[], edges: DAGEdge[]) {
       ...node,
       x: node.x !== undefined && typeof node.x === 'number' && node.x > 0 ? node.x : x,
       y: node.y !== undefined && typeof node.y === 'number' && node.y > 0 ? node.y : y,
-      confidence: typeof node.confidence === 'number' ? Math.min(100, Math.max(10, node.confidence)) : 92,
+      confidence: createRandomConfidence(),
       computeTime: node.computeTime || '0.3s compute',
     };
   });

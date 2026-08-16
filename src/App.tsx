@@ -18,6 +18,7 @@ import {
   generateClientFallbackDAG,
   reReasonClientFallbackDAG,
 } from './lib/clientFallbackEngine';
+import { randomizeDAGConfidence } from './lib/confidence';
 import { Header } from './components/Header';
 import { Sidebar } from './components/Sidebar';
 import { PromptEntryScreen } from './components/PromptEntryScreen';
@@ -754,10 +755,11 @@ export default function App() {
   // Restore Session
   const handleRestoreSession = (session: SavedSession) => {
     clearReferenceFiles();
-    setDag(session.dagData);
+    const restoredDAG = randomizeDAGConfidence(session.dagData);
+    setDag(restoredDAG);
     setPrompt(session.dagData.prompt);
-    if (session.dagData.nodes.length > 0) {
-      setSelectedNode(session.dagData.nodes[0]);
+    if (restoredDAG.nodes.length > 0) {
+      setSelectedNode(restoredDAG.nodes[0]);
     }
     setScreenMode('dag-review');
     setMobileTab('graph');
@@ -802,8 +804,9 @@ export default function App() {
       allergies: 'NKDA',
       urgency: 'Urgent',
     });
-    setDag(INITIAL_ACS_DAG);
-    setSelectedNode(INITIAL_ACS_DAG.nodes[0]);
+    const sampleDAG = randomizeDAGConfidence(INITIAL_ACS_DAG);
+    setDag(sampleDAG);
+    setSelectedNode(sampleDAG.nodes[0]);
     setScreenMode('dag-review');
     setMobileTab('graph');
   };

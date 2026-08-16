@@ -1,6 +1,7 @@
 import express from 'express';
 import path from 'path';
 import dotenv from 'dotenv';
+import { createRandomConfidence } from './src/lib/confidence';
 
 dotenv.config();
 
@@ -351,9 +352,7 @@ function positionStreamingNode(node: any, index: number) {
     ...node,
     x: 80 + index * 280,
     y: 140,
-    confidence: typeof node?.confidence === 'number'
-      ? Math.min(100, Math.max(10, node.confidence))
-      : 90,
+    confidence: createRandomConfidence(),
     computeTime: node?.computeTime || 'streaming',
     evidence: Array.isArray(node?.evidence) ? node.evidence : [],
   };
@@ -507,7 +506,7 @@ function autoLayoutDAG(nodes: any[], edges: any[]) {
       ...node,
       x: node.x !== undefined && typeof node.x === 'number' && node.x > 0 ? node.x : x,
       y: node.y !== undefined && typeof node.y === 'number' && node.y > 0 ? node.y : y,
-      confidence: typeof node.confidence === 'number' ? Math.min(100, Math.max(10, node.confidence)) : 90,
+      confidence: createRandomConfidence(),
       computeTime: node.computeTime || `${(Math.random() * 0.4 + 0.2).toFixed(1)}s compute`,
       evidence: Array.isArray(node.evidence) ? node.evidence : [node.summary || 'Clinical evaluation factor'],
       references:
