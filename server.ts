@@ -1,8 +1,11 @@
 import express from 'express';
 import path from 'path';
 import dotenv from 'dotenv';
-import { createRandomConfidence } from './src/lib/confidence';
-import { layoutDAGByConnections } from './src/lib/dagLayout';
+// Vercel executes the emitted server as native Node ESM, which requires explicit
+// file extensions for relative runtime imports. TypeScript resolves these .js
+// specifiers back to their .ts sources during development and build.
+import { createRandomConfidence } from './src/lib/confidence.js';
+import { layoutDAGByConnections } from './src/lib/dagLayout.js';
 
 dotenv.config();
 

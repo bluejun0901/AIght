@@ -1,4 +1,4 @@
-import { DAGEdge, DAGNode } from '../types';
+import type { DAGEdge, DAGNode } from '../types.js';
 
 const START_X = 80;
 const START_Y = 140;

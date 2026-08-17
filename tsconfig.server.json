@@ -1,0 +1,18 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "allowImportingTsExtensions": false,
+    "noEmit": true
+  },
+  "include": [
+    "api/index.ts",
+    "server.ts",
+    "src/lib/confidence.ts",
+    "src/lib/dagLayout.ts",
+    "src/types.ts"
+  ]
+}

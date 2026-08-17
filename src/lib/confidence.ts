@@ -1,4 +1,4 @@
-import { DAGNode, ReasoningDAG } from '../types';
+import type { DAGNode, ReasoningDAG } from '../types.js';
 
 const MIN_CONFIDENCE = 90;
 const MAX_CONFIDENCE = 100;
