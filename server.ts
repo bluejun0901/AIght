@@ -2,6 +2,7 @@ import express from 'express';
 import path from 'path';
 import dotenv from 'dotenv';
 import { createRandomConfidence } from './src/lib/confidence';
+import { layoutDAGByConnections } from './src/lib/dagLayout';
 
 dotenv.config();
 
@@ -1730,16 +1731,7 @@ Generate the corrected downstream reasoning DAG branch, new edges connecting to 
 
     const validIntactNodes = (intactNodes || []).filter((n: any) => n.id !== flaggedNode.id);
     const baseNodes = [...validIntactNodes, markedFlaggedNode];
-    const validEdges = (intactEdges || []).filter(
-      (e: any) => e.target !== flaggedNode.id && e.source !== flaggedNode.id
-    );
-    const flaggedEdge = {
-      id: `flagged-edge-${flaggedNode.id}`,
-      source: validIntactNodes[0]?.id || 'node-1',
-      target: flaggedNode.id,
-      label: 'Flagged Deviation',
-      isFlaggedPath: true,
-    };
+    const validEdges = [...(intactEdges || [])];
 
     const generatedAt = new Date().toISOString();
     res.status(200);
@@ -1823,10 +1815,17 @@ Generate the corrected downstream reasoning DAG branch, new edges connecting to 
     const combinedNodes = [...validIntactNodes, markedFlaggedNode, ...newReplacementNodes];
 
     // Combine edges
-    const combinedEdges = [...validEdges, flaggedEdge, ...streamedNewEdges];
+    const combinedEdges = [...validEdges];
+    streamedNewEdges.forEach((edge: any) => {
+      const existingIndex = combinedEdges.findIndex((item: any) => item.id === edge.id);
+      if (existingIndex >= 0) combinedEdges[existingIndex] = edge;
+      else combinedEdges.push(edge);
+    });
 
-    // Auto-layout combined graph
-    const layout = autoLayoutDAG(combinedNodes, combinedEdges);
+    // Use the same connection-aware incremental layout as the live client.
+    // Existing nodes remain fixed; only nodes created by this stream are placed.
+    const movableNodeIds = new Set(newReplacementNodes.map((node: any) => node.id));
+    const positionedNodes = layoutDAGByConnections(combinedNodes, combinedEdges, movableNodeIds);
 
     const updatedDAG = {
       prompt,
@@ -1837,8 +1836,8 @@ Generate the corrected downstream reasoning DAG branch, new edges connecting to 
       prescriptions: streamedResult?.prescriptions || [],
       contraindicationsChecked: streamedResult?.contraindicationsChecked || [],
       followUpInstructions: streamedResult?.followUpInstructions || 'Continue telemetry and serial evaluation',
-      nodes: layout.nodes,
-      edges: layout.edges,
+      nodes: positionedNodes,
+      edges: combinedEdges,
     };
 
     writeSse(res, 'complete', updatedDAG);
@@ -1864,12 +1863,14 @@ Generate the corrected downstream reasoning DAG branch, new edges connecting to 
       flagReason: `Overridden by physician: ${req.body.correctionInstructions || ''}`,
     };
     const combinedNodes = [...validIntactNodes, markedFlagged, ...(fallback.newNodes || [])];
-    const combinedEdges = [
-      ...(req.body.intactEdges || []),
-      { id: `flagged-edge-fallback`, source: validIntactNodes[0]?.id || 'node-1', target: markedFlagged.id, isFlaggedPath: true },
-      ...(fallback.newEdges || []),
-    ];
-    const layout = autoLayoutDAG(combinedNodes, combinedEdges);
+    const combinedEdges = [...(req.body.intactEdges || [])];
+    (fallback.newEdges || []).forEach((edge: any) => {
+      const existingIndex = combinedEdges.findIndex((item: any) => item.id === edge.id);
+      if (existingIndex >= 0) combinedEdges[existingIndex] = edge;
+      else combinedEdges.push(edge);
+    });
+    const movableNodeIds = new Set((fallback.newNodes || []).map((node: any) => node.id));
+    const positionedNodes = layoutDAGByConnections(combinedNodes, combinedEdges, movableNodeIds);
     res.json({
       prompt: req.body.prompt || '',
       generatedAt: new Date().toISOString(),
@@ -1879,8 +1880,8 @@ Generate the corrected downstream reasoning DAG branch, new edges connecting to 
       prescriptions: fallback.prescriptions,
       contraindicationsChecked: fallback.contraindicationsChecked,
       followUpInstructions: fallback.followUpInstructions,
-      nodes: layout.nodes,
-      edges: layout.edges,
+      nodes: positionedNodes,
+      edges: combinedEdges,
     });
   }
 });

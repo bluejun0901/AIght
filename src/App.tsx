@@ -19,6 +19,7 @@ import {
   reReasonClientFallbackDAG,
 } from './lib/clientFallbackEngine';
 import { randomizeDAGConfidence } from './lib/confidence';
+import { layoutDAGByConnections } from './lib/dagLayout';
 import { Header } from './components/Header';
 import { Sidebar } from './components/Sidebar';
 import { PromptEntryScreen } from './components/PromptEntryScreen';
@@ -354,7 +355,7 @@ export default function App() {
               (item) => !item.isStreaming || item.streamIndex !== streamIndex
             );
             nodes.push(streamingNode);
-            return { ...base, nodes };
+            return { ...base, nodes: layoutDAGByConnections(nodes, base.edges) };
           });
         } else if (eventName === 'node') {
           const node = data as DAGNode;
@@ -371,7 +372,7 @@ export default function App() {
             const nodes = index >= 0
               ? withoutPlaceholder.map((item, itemIndex) => itemIndex === index ? node : item)
               : [...withoutPlaceholder, node];
-            return { ...base, nodes };
+            return { ...base, nodes: layoutDAGByConnections(nodes, base.edges) };
           });
           setSelectedNode((current) => {
             if (!current) return node;
@@ -386,7 +387,7 @@ export default function App() {
             const edges = index >= 0
               ? base.edges.map((item, itemIndex) => itemIndex === index ? edge : item)
               : [...base.edges, edge];
-            return { ...base, edges };
+            return { ...base, nodes: layoutDAGByConnections(base.nodes, edges), edges };
           });
         } else if (eventName === 'result') {
           setDag((current) => ({
@@ -400,7 +401,10 @@ export default function App() {
         } else if (eventName === 'complete') {
           const completedDAG = data as ReasoningDAG;
           receivedComplete = true;
-          setDag(completedDAG);
+          setDag({
+            ...completedDAG,
+            nodes: layoutDAGByConnections(completedDAG.nodes, completedDAG.edges),
+          });
           setSelectedNode((current) =>
             completedDAG.nodes.find((node) => node.id === current?.id) || completedDAG.nodes[0] || null
           );
@@ -494,11 +498,10 @@ export default function App() {
 
   // 5. Update single node position (drag on canvas)
   const handleUpdateNodePosition = (nodeId: string, x: number, y: number) => {
-    if (!dag) return;
-    setDag({
-      ...dag,
-      nodes: dag.nodes.map((n) => (n.id === nodeId ? { ...n, x, y } : n)),
-    });
+    setDag((current) => current ? {
+      ...current,
+      nodes: current.nodes.map((n) => (n.id === nodeId ? { ...n, x, y } : n)),
+    } : current);
   };
 
   // 6. Execute Re-Reasoning from Flagged Node
@@ -511,11 +514,10 @@ export default function App() {
     setIsLoadingReReason(true);
     setErrorToast(null);
 
-    // Identify intact upstream nodes
+    // Preserve the existing graph topology. The flagged node is sent separately,
+    // but all of its original incoming/outgoing edges remain valid context.
     const intactNodes = dag.nodes.filter((n) => !n.flaggedIncorrect);
-    const intactEdges = dag.edges.filter(
-      (e) => e.target !== primaryFlagged.id && e.source !== primaryFlagged.id
-    );
+    const intactEdges = dag.edges;
 
     try {
       const response = await fetch('/api/re-reason', {
@@ -627,7 +629,15 @@ export default function App() {
             const nodes = current.nodes.filter(
               (node) => !node.isStreaming || node.streamIndex !== streamIndex
             );
-            return { ...current, nodes: [...nodes, streamingNode] };
+            const nextNodes = [...nodes, streamingNode];
+            const movableIds = new Set([
+              ...requestNodeIds,
+              ...nextNodes.filter((item) => item.isStreaming).map((item) => item.id),
+            ]);
+            return {
+              ...current,
+              nodes: layoutDAGByConnections(nextNodes, current.edges, movableIds),
+            };
           });
           setSelectedNode((current) =>
             !current || current.flaggedIncorrect || current.isStreaming ? streamingNode : current
@@ -647,7 +657,11 @@ export default function App() {
             const nodes = existingIndex >= 0
               ? withoutPlaceholder.map((item, index) => index === existingIndex ? node : item)
               : [...withoutPlaceholder, node];
-            return { ...current, nodes };
+            const movableIds = new Set([...requestNodeIds, node.id]);
+            return {
+              ...current,
+              nodes: layoutDAGByConnections(nodes, current.edges, movableIds),
+            };
           });
           setSelectedNode((current) =>
             !current || current.flaggedIncorrect ||
@@ -661,7 +675,15 @@ export default function App() {
             const edges = existingIndex >= 0
               ? current.edges.map((item, index) => index === existingIndex ? edge : item)
               : [...current.edges, edge];
-            return { ...current, edges };
+            const movableIds = new Set([
+              ...requestNodeIds,
+              ...current.nodes.filter((node) => node.isStreaming).map((node) => node.id),
+            ]);
+            return {
+              ...current,
+              nodes: layoutDAGByConnections(current.nodes, edges, movableIds),
+              edges,
+            };
           });
         } else if (eventName === 'result') {
           setDag((current) => current ? {
@@ -675,7 +697,30 @@ export default function App() {
         } else if (eventName === 'complete') {
           const updatedDAG = data as ReasoningDAG;
           receivedComplete = true;
-          setDag(updatedDAG);
+          setDag((current) => {
+            if (!current) return updatedDAG;
+
+            // The stream has already established the visible topology and node
+            // positions. Merge only the final model metadata so completion does
+            // not cause a last-frame edge/coordinate jump.
+            const streamedNodeById = new Map<string, DAGNode>(
+              current.nodes
+                .filter((node) => !node.isStreaming)
+                .map((node) => [node.id, node])
+            );
+            const nodes = updatedDAG.nodes.map((node) => {
+              const streamedNode = streamedNodeById.get(node.id);
+              return streamedNode
+                ? { ...node, x: streamedNode.x, y: streamedNode.y }
+                : node;
+            });
+
+            return {
+              ...updatedDAG,
+              nodes,
+              edges: current.edges,
+            };
+          });
           setSelectedNode((current) =>
             updatedDAG.nodes.find((node) => node.id === current?.id) ||
             updatedDAG.nodes.find((node) => requestNodeIds.has(node.id)) ||

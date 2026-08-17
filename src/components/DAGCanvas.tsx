@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { DAGNode, DAGEdge, ReasoningDAG, NodeType } from '../types';
+import { getNextStreamingNodePosition } from '../lib/dagLayout';
 import {
   ZoomIn,
   ZoomOut,
@@ -132,9 +133,8 @@ export const DAGCanvas: React.FC<DAGCanvasProps> = ({
   const [zoom, setZoom] = useState(1);
   const [isPanning, setIsPanning] = useState(false);
   const [startPan, setStartPan] = useState({ x: 0, y: 0 });
-  const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null);
-  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
-  const lastTouchRef = useRef<{ x: number; y: number } | null>(null);
+  const draggingNodeIdRef = useRef<string | null>(null);
+  const dragOffsetRef = useRef({ x: 0, y: 0 });
 
   // Internal state if not passed from outside
   const [internalHideFlagged, setInternalHideFlagged] = useState(false);
@@ -189,21 +189,22 @@ export const DAGCanvas: React.FC<DAGCanvasProps> = ({
         x: e.clientX - startPan.x,
         y: e.clientY - startPan.y,
       });
-    } else if (draggingNodeId && dag) {
-      const node = dag.nodes.find((n) => n.id === draggingNodeId);
+    } else if (draggingNodeIdRef.current && dag) {
+      const activeNodeId = draggingNodeIdRef.current;
+      const node = dag.nodes.find((n) => n.id === activeNodeId);
       if (node && containerRef.current) {
         const rect = containerRef.current.getBoundingClientRect();
         // Allow unconstrained wide canvas dragging without harsh clipping bounds
-        const rawX = (e.clientX - rect.left - pan.x) / zoom - dragOffset.x;
-        const rawY = (e.clientY - rect.top - pan.y) / zoom - dragOffset.y;
-        onUpdateNodePosition(draggingNodeId, Math.round(rawX), Math.round(rawY));
+        const rawX = (e.clientX - rect.left - pan.x) / zoom - dragOffsetRef.current.x;
+        const rawY = (e.clientY - rect.top - pan.y) / zoom - dragOffsetRef.current.y;
+        onUpdateNodePosition(activeNodeId, rawX, rawY);
       }
     }
   };
 
   const handleMouseUp = () => {
     setIsPanning(false);
-    setDraggingNodeId(null);
+    draggingNodeIdRef.current = null;
   };
 
   // Touch Support for Mobile & Tablets
@@ -214,7 +215,6 @@ export const DAGCanvas: React.FC<DAGCanvasProps> = ({
       if (target.closest('.dag-node-card')) return;
       setIsPanning(true);
       setStartPan({ x: touch.clientX - pan.x, y: touch.clientY - pan.y });
-      lastTouchRef.current = { x: touch.clientX, y: touch.clientY };
     }
   };
 
@@ -225,35 +225,35 @@ export const DAGCanvas: React.FC<DAGCanvasProps> = ({
         x: touch.clientX - startPan.x,
         y: touch.clientY - startPan.y,
       });
-    } else if (draggingNodeId && dag && e.touches.length === 1) {
+    } else if (draggingNodeIdRef.current && dag && e.touches.length === 1) {
       const touch = e.touches[0];
       if (containerRef.current) {
         const rect = containerRef.current.getBoundingClientRect();
-        const rawX = (touch.clientX - rect.left - pan.x) / zoom - dragOffset.x;
-        const rawY = (touch.clientY - rect.top - pan.y) / zoom - dragOffset.y;
-        onUpdateNodePosition(draggingNodeId, Math.round(rawX), Math.round(rawY));
+        const rawX = (touch.clientX - rect.left - pan.x) / zoom - dragOffsetRef.current.x;
+        const rawY = (touch.clientY - rect.top - pan.y) / zoom - dragOffsetRef.current.y;
+        onUpdateNodePosition(draggingNodeIdRef.current, rawX, rawY);
       }
     }
   };
 
   const handleTouchEnd = () => {
     setIsPanning(false);
-    setDraggingNodeId(null);
-    lastTouchRef.current = null;
+    draggingNodeIdRef.current = null;
   };
 
   // Node Drag start
   const handleNodeMouseDown = (e: React.MouseEvent, node: DAGNode) => {
     e.stopPropagation();
-    setDraggingNodeId(node.id);
+    draggingNodeIdRef.current = node.id;
     if (containerRef.current) {
       const rect = containerRef.current.getBoundingClientRect();
       const nodeCanvasX = node.x * zoom + pan.x + rect.left;
       const nodeCanvasY = node.y * zoom + pan.y + rect.top;
-      setDragOffset({
+      const nextOffset = {
         x: (e.clientX - nodeCanvasX) / zoom,
         y: (e.clientY - nodeCanvasY) / zoom,
-      });
+      };
+      dragOffsetRef.current = nextOffset;
     }
   };
 
@@ -261,15 +261,16 @@ export const DAGCanvas: React.FC<DAGCanvasProps> = ({
     e.stopPropagation();
     if (e.touches.length === 1) {
       const touch = e.touches[0];
-      setDraggingNodeId(node.id);
+      draggingNodeIdRef.current = node.id;
       if (containerRef.current) {
         const rect = containerRef.current.getBoundingClientRect();
         const nodeCanvasX = node.x * zoom + pan.x + rect.left;
         const nodeCanvasY = node.y * zoom + pan.y + rect.top;
-        setDragOffset({
+        const nextOffset = {
           x: (touch.clientX - nodeCanvasX) / zoom,
           y: (touch.clientY - nodeCanvasY) / zoom,
-        });
+        };
+        dragOffsetRef.current = nextOffset;
       }
     }
   };
@@ -728,7 +729,7 @@ export const DAGCanvas: React.FC<DAGCanvasProps> = ({
                 top: `${node.y}px`,
                 width: '220px',
               }}
-              className={`dag-node-card absolute pointer-events-auto rounded-xl bg-white p-3.5 transition-all duration-150 select-none ${
+              className={`dag-node-card absolute pointer-events-auto rounded-xl bg-white p-3.5 transition-[border-color,box-shadow] duration-150 select-none ${
                 isStreamingNode
                   ? 'cursor-wait border border-[#00A896]/50 shadow-[0_4px_16px_rgba(0,168,150,0.12)] ring-2 ring-[#00A896]/10'
                   : isFlagged
@@ -821,6 +822,7 @@ export const DAGCanvas: React.FC<DAGCanvasProps> = ({
             onClick={(event) => {
               event.stopPropagation();
               const streamIndex = visibleNodes.filter((node) => !node.isStreaming).length;
+              const position = getNextStreamingNodePosition(visibleNodes, visibleEdges);
               onSelectNode({
                 id: `streaming-node-${streamIndex}`,
                 type: 'OBSERVATION',
@@ -829,18 +831,15 @@ export const DAGCanvas: React.FC<DAGCanvasProps> = ({
                 detail: '',
                 confidence: 0,
                 evidence: [],
-                x: 80 + streamIndex * 280,
-                y: 140,
+                x: position.x,
+                y: position.y,
                 isStreaming: true,
                 streamIndex,
                 computeTime: 'streaming',
               });
             }}
             className="dag-node-card absolute pointer-events-auto w-[220px] cursor-pointer rounded-xl border border-dashed border-[#00A896]/50 bg-white/90 p-3.5 shadow-[0_4px_16px_rgba(0,168,150,0.08)] hover:border-[#00A896] hover:ring-2 hover:ring-[#00A896]/10"
-            style={{
-              left: `${80 + visibleNodes.filter((node) => !node.isStreaming).length * 280}px`,
-              top: '140px',
-            }}
+            style={getNextStreamingNodePosition(visibleNodes, visibleEdges)}
             aria-label="다음 추론 단계 생성 중"
           >
             <div className="mb-2 flex items-center justify-between">

@@ -1,6 +1,7 @@
 import { ReasoningDAG, DAGNode, DAGEdge, NodeType } from '../types';
 import { INITIAL_ACS_DAG, SAMPLE_CLINICAL_CASES } from './mockData';
 import { createRandomConfidence } from './confidence';
+import { layoutDAGByConnections } from './dagLayout';
 
 // Topological Auto-Layout Algorithm for DAG coordinates
 export function layoutNodesAndEdges(nodes: DAGNode[], edges: DAGEdge[]) {
@@ -1188,9 +1189,19 @@ export function generateDeterministicReReasonDAG(
       : []),
   ];
 
-  const allNodes = [...intactNodes, ...replacementNodes];
+  const markedFlaggedNode = {
+    ...flaggedNode,
+    flaggedIncorrect: true,
+    flagReason: flaggedNode.flagReason || `Overridden by physician: ${correctionInstructions}`,
+  };
+  const allNodes = [
+    ...intactNodes.filter((node) => node.id !== flaggedNode.id),
+    markedFlaggedNode,
+    ...replacementNodes,
+  ];
   const allEdges = [...intactEdges, ...replacementEdges];
-  const layout = layoutNodesAndEdges(allNodes, allEdges);
+  const movableNodeIds = new Set(replacementNodes.map((node) => node.id));
+  const positionedNodes = layoutDAGByConnections(allNodes, allEdges, movableNodeIds);
 
   return {
     prompt,
@@ -1203,7 +1214,7 @@ export function generateDeterministicReReasonDAG(
       'Safety checklist re-evaluated following physician clinical override',
     ],
     followUpInstructions: 'Continuous telemetry and scheduled vital signs monitoring per updated protocol.',
-    nodes: layout.nodes,
-    edges: layout.edges,
+    nodes: positionedNodes,
+    edges: allEdges,
   };
 }
